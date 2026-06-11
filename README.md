@@ -291,6 +291,57 @@ fuser -m /mnt/cow
 lsof | grep /mnt/cow
 ```
 
+Если `rmmod cowfs` выдаёт `ERROR: Module cowfs is in use`, а
+`lsmod | grep cowfs` показывает refcount > 0 даже после успешного
+`umount` — модуль завис (остался лишний `module_get` от предыдущих
+попыток монтирования в этой же сессии). В WSL2 проще всего сбросить
+состояние ядра целиком:
+
+```powershell
+wsl --shutdown
+```
+
+После повторного запуска Ubuntu `lsmod | grep cowfs` и
+`mount | grep cowfs` должны быть пустыми, можно грузить модуль заново.
+
+---
+
+## Полное удаление и переустановка обновлённой версии
+
+```bash
+# 1. Размонтировать и выгрузить текущий модуль
+sudo umount /mnt/cow
+sudo rmmod cowfs
+
+# 2. Проверить, что ничего не осталось
+lsmod | grep cowfs
+mount | grep cowfs
+
+# 3. Получить свежую версию исходников
+cd ~/cowfs
+git fetch origin
+git reset --hard origin/main
+
+# 4. Полностью пересобрать (без старых .o/.ko/.symvers)
+cd kernel
+make clean
+make
+
+# 5. Загрузить и смонтировать обновлённый модуль
+sudo insmod cowfs.ko window_seconds=120 gc_interval=30
+sudo mount -t cowfs -o lowerdir=/data/lower cowfs /mnt/cow
+mount | grep cowfs
+ls -la /mnt/cow
+
+# 6. (опционально) пересобрать userspace-утилиту
+cd ../userspace
+make
+sudo cp cowctl /usr/local/bin/
+```
+
+> Если `rmmod` на шаге 1 ругается "Module cowfs is in use" —
+> см. раздел "Отладка" выше (`wsl --shutdown` для WSL2).
+
 ---
 
 ## Параметры модуля
