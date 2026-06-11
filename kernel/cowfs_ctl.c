@@ -56,12 +56,16 @@ static int rollback_deleted(const char *path, u64 timestamp)
         *slash = '\0';
 
     v = cowfs_version_find_deleted(base, timestamp);
-    if (!v)
+    if (!v) {
+        pr_info("cowfs: rollback_deleted: no UNLINK version for '%s'\n", base);
         return -ENOENT;
+    }
 
     err = kern_path(dirbuf, LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &parent_path);
-    if (err)
+    if (err) {
+        pr_info("cowfs: rollback_deleted: kern_path('%s') = %d\n", dirbuf, err);
         return err;
+    }
 
     if (parent_path.dentry->d_sb->s_magic != COWFS_MAGIC) {
         path_put(&parent_path);
@@ -75,15 +79,37 @@ static int rollback_deleted(const char *path, u64 timestamp)
     inode_lock(lower_dir);
     new_dentry = lookup_one_len(base, lower_parent, strlen(base));
     if (!IS_ERR(new_dentry)) {
+        pr_info("cowfs: rollback_deleted: '%s' lookup ok, positive=%d\n",
+                base, d_is_positive(new_dentry));
         err = vfs_create(&nop_mnt_idmap, lower_dir, new_dentry,
                           v->saved_stat.mode, false);
-        if (!err && v->has_data)
-            cowfs_shadow_restore_file(v->shadow_path, new_dentry, sbi->lower_mnt);
+        pr_info("cowfs: rollback_deleted: vfs_create('%s') = %d, has_data=%d\n",
+                base, err, v->has_data);
+        if (!err && v->has_data) {
+            int rerr = cowfs_shadow_restore_file(v->shadow_path, new_dentry, sbi->lower_mnt);
+            pr_info("cowfs: rollback_deleted: shadow_restore('%s') = %d\n",
+                    v->shadow_path, rerr);
+        }
         dput(new_dentry);
     } else {
         err = PTR_ERR(new_dentry);
+        pr_info("cowfs: rollback_deleted: lookup_one_len('%s') = %d\n", base, err);
     }
     inode_unlock(lower_dir);
+
+    /* Сбросить устаревший (отрицательный) dentry в кэше cowfs для
+     * воссозданного файла, чтобы последующий доступ к пути увидел его. */
+    {
+        struct qstr qname = QSTR_INIT(base, strlen(base));
+        struct dentry *stale = d_lookup(parent_path.dentry, &qname);
+
+        if (stale) {
+            pr_info("cowfs: rollback_deleted: dropping cached dentry '%s' (positive=%d)\n",
+                    base, d_is_positive(stale));
+            d_drop(stale);
+            dput(stale);
+        }
+    }
 
     path_put(&parent_path);
     return err;
@@ -216,9 +242,28 @@ list_out:
                         .new_dentry    = old_name_dentry,
                     };
                     err = vfs_rename(&rd);
+                    pr_info("cowfs: rename rollback: vfs_rename -> '%s' = %d\n",
+                            v->orig_name, err);
+                    if (!err) {
+                        /* Сбросить устаревшие dentry уровня cowfs:
+                         * новое имя больше не существует, старое —
+                         * появилось. */
+                        struct qstr qname = QSTR_INIT(v->orig_name,
+                                                       strlen(v->orig_name));
+                        struct dentry *stale_old =
+                            d_lookup(target_path.dentry->d_parent, &qname);
+
+                        if (stale_old) {
+                            d_drop(stale_old);
+                            dput(stale_old);
+                        }
+                        d_drop(target_path.dentry);
+                    }
                     dput(old_name_dentry);
                 } else {
                     err = PTR_ERR(old_name_dentry);
+                    pr_info("cowfs: rename rollback: lookup_one_len('%s') = %d\n",
+                            v->orig_name, err);
                 }
                 inode_unlock(dir_inode);
             }
