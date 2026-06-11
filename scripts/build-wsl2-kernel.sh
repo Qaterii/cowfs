@@ -30,6 +30,12 @@ cd "$BUILD_DIR"
 
 echo "==> Конфигурация (Microsoft/config-wsl)"
 cp Microsoft/config-wsl .config
+
+# Отключаем генерацию BTF: tools/bpf/resolve_btfids часто не собирается
+# из-за -Werror с новыми версиями GCC (Ubuntu 26.04+). BTF нам не нужен.
+./scripts/config --disable DEBUG_INFO_BTF
+./scripts/config --disable DEBUG_INFO_BTF_MODULES
+
 make olddefconfig
 
 echo "==> Сборка ядра (это займёт 20-40 минут)"

@@ -18,7 +18,7 @@
 #include <linux/moduleparam.h>
 #include <linux/version.h>
 
-#define COWFS_MAGIC         0xC0WBEE15
+#define COWFS_MAGIC         0xC0FFEE15
 #define COWFS_SHADOW_DIR    ".cowfs_shadow"
 #define COWFS_MAX_VERSIONS  64
 #define COWFS_DEV_NAME      "cowfs_ctl"
