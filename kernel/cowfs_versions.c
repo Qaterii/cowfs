@@ -192,11 +192,12 @@ void cowfs_versions_gc_all(void)
 {
     struct cow_inode_info *info;
     struct cow_version *v, *tmp;
+    struct hlist_node *hnode_tmp;
     int bkt;
     unsigned long flags;
 
     spin_lock_irqsave(&versions_lock, flags);
-    hash_for_each(versions_htable, bkt, info, hash_node) {
+    hash_for_each_safe(versions_htable, bkt, hnode_tmp, info, hash_node) {
         spin_lock(&info->lock);
         list_for_each_entry_safe(v, tmp, &info->versions, node) {
             list_del(&v->node);
