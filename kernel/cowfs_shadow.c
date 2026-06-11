@@ -5,6 +5,8 @@
 #include <linux/namei.h>
 #include <linux/slab.h>
 #include <linux/cred.h>
+#include <linux/sched.h>
+#include <linux/init_task.h>
 
 #define COPY_BUF_SIZE (64 * 1024)
 
@@ -19,7 +21,7 @@
  */
 static struct cred *cowfs_shadow_enter(const struct cred **old_cred)
 {
-    struct cred *new_cred = prepare_kernel_cred(NULL);
+    struct cred *new_cred = prepare_kernel_cred(&init_task);
 
     if (!new_cred)
         return NULL;
