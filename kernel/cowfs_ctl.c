@@ -139,7 +139,9 @@ list_out:
                     .ia_gid   = v->saved_stat.gid,
                     .ia_mode  = v->saved_stat.mode,
                 };
+                inode_lock(d_inode(lower));
                 notify_change(&nop_mnt_idmap, lower, &attr, NULL);
+                inode_unlock(d_inode(lower));
             }
         }
         path_put(&target_path);
