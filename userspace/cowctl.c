@@ -79,7 +79,7 @@ static void cmd_list(const char *path)
     printf("%-22s %-10s %s\n", "---------", "---------", "------");
 
     for (i = 0; i < req.found_count; i++) {
-        time_t ts = (time_t)req.versions[i].timestamp;
+        time_t ts = (time_t)(req.versions[i].timestamp / 1000000000ULL);
         struct tm *tm_info = localtime(&ts);
         strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", tm_info);
         printf("%-22s %-10s %s\n",

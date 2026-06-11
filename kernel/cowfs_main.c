@@ -8,11 +8,11 @@ MODULE_VERSION("1.0");
 ulong cowfs_window_seconds = 300;
 ulong cowfs_gc_interval    = 60;
 
-module_param(cowfs_window_seconds, ulong, 0644);
-MODULE_PARM_DESC(cowfs_window_seconds, "How long to keep snapshots (seconds)");
+module_param_named(window_seconds, cowfs_window_seconds, ulong, 0644);
+MODULE_PARM_DESC(window_seconds, "How long to keep snapshots (seconds)");
 
-module_param(cowfs_gc_interval, ulong, 0644);
-MODULE_PARM_DESC(cowfs_gc_interval, "GC run interval (seconds)");
+module_param_named(gc_interval, cowfs_gc_interval, ulong, 0644);
+MODULE_PARM_DESC(gc_interval, "GC run interval (seconds)");
 
 static struct file_system_type cowfs_type = {
     .name    = "cowfs",

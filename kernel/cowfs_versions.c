@@ -3,6 +3,7 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
+#include <linux/ktime.h>
 
 #define VERSIONS_HASH_BITS 8
 static DEFINE_HASHTABLE(versions_htable, VERSIONS_HASH_BITS);
@@ -52,7 +53,10 @@ struct cow_version *cowfs_version_alloc(enum cow_op op)
     struct cow_version *v = kmem_cache_zalloc(cow_version_cache, GFP_KERNEL);
     if (!v)
         return NULL;
-    v->timestamp = ktime_get_real_seconds();
+    /* Наносекундное разрешение: версии, созданные в пределах одной
+     * секунды (например, два подряд idущих truncate), не должны
+     * получать одинаковый timestamp/shadow_path. */
+    v->timestamp = ktime_get_real_ns();
     v->op_type   = op;
     INIT_LIST_HEAD(&v->node);
     return v;
@@ -168,8 +172,8 @@ void cowfs_version_gc(void)
 {
     struct cow_inode_info *info;
     struct cow_version *v, *tmp;
-    u64 now    = ktime_get_real_seconds();
-    u64 cutoff = now - cowfs_window_seconds;
+    u64 now    = ktime_get_real_ns();
+    u64 cutoff = now - (u64)cowfs_window_seconds * NSEC_PER_SEC;
     int bkt;
     unsigned long flags;
 
