@@ -65,6 +65,8 @@ struct cow_version *cowfs_version_alloc(enum cow_op op)
 
 void cowfs_version_free(struct cow_version *v)
 {
+    pr_info("cowfs: version_free: op=%d has_data=%d shadow='%s'\n",
+            v->op_type, v->has_data, v->shadow_path);
     if (v->has_data)
         cowfs_shadow_remove(v->shadow_path);
     kmem_cache_free(cow_version_cache, v);
