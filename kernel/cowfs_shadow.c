@@ -36,6 +36,22 @@ static void cowfs_shadow_exit(struct cred *new_cred,
     put_cred(new_cred);
 }
 
+/*
+ * Кэш dentry/vfsmount директории .cowfs_shadow, заполняется при
+ * монтировании. Версии хранятся в ГЛОБАЛЬНОЙ хеш-таблице (без привязки
+ * к конкретному sb), а сборщик мусора (cowfs_version_gc) выполняется
+ * из контекста воркера workqueue, у которого current->fs/mnt-namespace
+ * может отличаться от процесса, выполнившего mount. kern_path() с
+ * абсолютным путём в этом контексте может вернуть -ENOENT даже для
+ * существующих файлов. lookup_one_len()/vfs_unlink() относительно
+ * закэшированного dentry от current не зависят и работают в любом
+ * контексте.
+ *
+ * Прототип рассчитан на единственный одновременный mount cowfs.
+ */
+static struct path cowfs_shadow_dirpath;
+static bool        cowfs_shadow_dirpath_valid;
+
 int cowfs_shadow_init(struct super_block *sb)
 {
     struct cowfs_sb_info *sbi = COWFS_SB(sb);
@@ -55,12 +71,17 @@ int cowfs_shadow_init(struct super_block *sb)
     if (d_is_negative(shadow_dentry)) {
         err = vfs_mkdir(&nop_mnt_idmap, lower_dir_inode,
                         shadow_dentry, 0700);
-        if (err)
+        if (err) {
             pr_err("cowfs: failed to create shadow dir: %d\n", err);
-        else
-            pr_info("cowfs: created shadow dir\n");
+            dput(shadow_dentry);
+            goto out_unlock;
+        }
+        pr_info("cowfs: created shadow dir\n");
     }
-    dput(shadow_dentry);
+
+    cowfs_shadow_dirpath.dentry = shadow_dentry; /* передаём ссылку */
+    cowfs_shadow_dirpath.mnt    = mntget(sbi->lower_mnt);
+    cowfs_shadow_dirpath_valid  = true;
 
 out_unlock:
     inode_unlock(lower_dir_inode);
@@ -69,6 +90,10 @@ out_unlock:
 
 void cowfs_shadow_cleanup(struct super_block *sb)
 {
+    if (cowfs_shadow_dirpath_valid) {
+        path_put(&cowfs_shadow_dirpath);
+        cowfs_shadow_dirpath_valid = false;
+    }
     pr_info("cowfs: shadow store preserved on unmount\n");
 }
 
@@ -197,30 +222,41 @@ out_cred:
 
 void cowfs_shadow_remove(const char *shadow_path)
 {
-    struct path path;
+    const char *base;
+    struct dentry *dir_dentry, *victim;
+    struct inode *dir;
     const struct cred *old_cred;
-    struct cred *new_cred = cowfs_shadow_enter(&old_cred);
+    struct cred *new_cred;
     int err;
 
+    if (!cowfs_shadow_dirpath_valid)
+        return;
+
+    base = strrchr(shadow_path, '/');
+    base = base ? base + 1 : shadow_path;
+
+    new_cred = cowfs_shadow_enter(&old_cred);
     if (!new_cred)
         return;
 
-    err = kern_path(shadow_path, 0, &path);
-    if (!err) {
-        struct inode *dir = d_inode(path.dentry->d_parent);
+    dir_dentry = cowfs_shadow_dirpath.dentry;
+    dir = d_inode(dir_dentry);
 
-        inode_lock(dir);
-        err = vfs_unlink(&nop_mnt_idmap, dir, path.dentry, NULL);
-        inode_unlock(dir);
-        path_put(&path);
-        if (err)
-            pr_warn("cowfs: failed to remove shadow %s: %d\n",
-                    shadow_path, err);
-        else
-            pr_info("cowfs: removed shadow %s\n", shadow_path);
+    inode_lock(dir);
+    victim = lookup_one_len(base, dir_dentry, strlen(base));
+    if (!IS_ERR(victim)) {
+        if (d_is_positive(victim)) {
+            err = vfs_unlink(&nop_mnt_idmap, dir, victim, NULL);
+            if (err)
+                pr_warn("cowfs: failed to remove shadow %s: %d\n",
+                        shadow_path, err);
+        }
+        dput(victim);
     } else {
-        pr_info("cowfs: shadow_remove: kern_path('%s') = %d\n", shadow_path, err);
+        pr_warn("cowfs: shadow_remove: lookup_one_len('%s') = %ld\n",
+                base, PTR_ERR(victim));
     }
+    inode_unlock(dir);
 
     cowfs_shadow_exit(new_cred, old_cred);
 }
