@@ -101,7 +101,13 @@ static int rollback_deleted(const char *path, u64 timestamp)
      * воссозданного файла, чтобы последующий доступ к пути увидел его. */
     {
         struct qstr qname = QSTR_INIT(base, strlen(base));
-        struct dentry *stale = d_lookup(parent_path.dentry, &qname);
+        struct dentry *stale;
+
+        qname.hash = full_name_hash(parent_path.dentry, qname.name, qname.len);
+        stale = d_lookup(parent_path.dentry, &qname);
+
+        pr_info("cowfs: rollback_deleted: stale dentry lookup for '%s' (hash=%u) -> %s\n",
+                base, qname.hash, stale ? "found" : "NULL");
 
         if (stale) {
             pr_info("cowfs: rollback_deleted: dropping cached dentry '%s' (positive=%d)\n",
@@ -250,8 +256,11 @@ list_out:
                          * появилось. */
                         struct qstr qname = QSTR_INIT(v->orig_name,
                                                        strlen(v->orig_name));
-                        struct dentry *stale_old =
-                            d_lookup(target_path.dentry->d_parent, &qname);
+                        struct dentry *stale_old;
+
+                        qname.hash = full_name_hash(target_path.dentry->d_parent,
+                                                      qname.name, qname.len);
+                        stale_old = d_lookup(target_path.dentry->d_parent, &qname);
 
                         if (stale_old) {
                             d_drop(stale_old);
