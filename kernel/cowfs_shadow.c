@@ -63,38 +63,49 @@ int cowfs_shadow_copy_file(struct dentry *lower_dentry,
     int err = 0;
     struct path lower_path = { .mnt = lower_mnt, .dentry = lower_dentry };
 
+    pr_emerg("cowfs: DEBUG copy_file: start, shadow_path=%s\n", shadow_path);
+
     src = dentry_open(&lower_path, O_RDONLY, current_cred());
+    pr_emerg("cowfs: DEBUG copy_file: dentry_open(src)=%p\n", src);
     if (IS_ERR(src))
         return PTR_ERR(src);
 
     dst = filp_open(shadow_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    pr_emerg("cowfs: DEBUG copy_file: filp_open(dst)=%p\n", dst);
     if (IS_ERR(dst)) {
         err = PTR_ERR(dst);
         goto out_src;
     }
 
     buf = kmalloc(COPY_BUF_SIZE, GFP_KERNEL);
+    pr_emerg("cowfs: DEBUG copy_file: kmalloc=%p\n", buf);
     if (!buf) {
         err = -ENOMEM;
         goto out_dst;
     }
 
     while ((bytes_read = kernel_read(src, buf, COPY_BUF_SIZE, &src_pos)) > 0) {
+        pr_emerg("cowfs: DEBUG copy_file: read %zd bytes\n", bytes_read);
         ssize_t written = kernel_write(dst, buf, bytes_read, &dst_pos);
+        pr_emerg("cowfs: DEBUG copy_file: wrote %zd bytes\n", written);
         if (written < 0) {
             err = written;
             goto out_buf;
         }
     }
+    pr_emerg("cowfs: DEBUG copy_file: loop done, bytes_read=%zd\n", bytes_read);
     if (bytes_read < 0)
         err = bytes_read;
 
 out_buf:
     kfree(buf);
 out_dst:
+    pr_emerg("cowfs: DEBUG copy_file: closing dst\n");
     filp_close(dst, NULL);
 out_src:
+    pr_emerg("cowfs: DEBUG copy_file: closing src\n");
     filp_close(src, NULL);
+    pr_emerg("cowfs: DEBUG copy_file: return %d\n", err);
     return err;
 }
 
