@@ -106,9 +106,6 @@ static int rollback_deleted(const char *path, u64 timestamp)
         qname.hash = full_name_hash(parent_path.dentry, qname.name, qname.len);
         stale = d_lookup(parent_path.dentry, &qname);
 
-        pr_info("cowfs: rollback_deleted: stale dentry lookup for '%s' (hash=%u) -> %s\n",
-                base, qname.hash, stale ? "found" : "NULL");
-
         if (stale) {
             pr_info("cowfs: rollback_deleted: dropping cached dentry '%s' (positive=%d)\n",
                     base, d_is_positive(stale));
