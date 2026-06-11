@@ -22,7 +22,7 @@ struct inode *cowfs_get_inode(struct super_block *sb,
     inode->i_gid   = lower_inode->i_gid;
     inode->i_atime = lower_inode->i_atime;
     inode->i_mtime = lower_inode->i_mtime;
-    inode->i_ctime = lower_inode->i_ctime;
+    inode_set_ctime_to_ts(inode, inode_get_ctime(lower_inode));
     set_nlink(inode, lower_inode->i_nlink);
     inode->i_size   = lower_inode->i_size;
     inode->i_blocks = lower_inode->i_blocks;
@@ -171,10 +171,18 @@ static int cowfs_rename(struct mnt_idmap *idmap,
         cowfs_version_add(ino, v);
     }
 
-    err = vfs_rename(&nop_mnt_idmap,
-                     d_inode(lower_old_dir), lower_old_dentry,
-                     d_inode(lower_new_dir), lower_new_dentry,
-                     NULL, flags);
+    {
+        struct renamedata rd = {
+            .old_mnt_idmap = &nop_mnt_idmap,
+            .old_dir       = d_inode(lower_old_dir),
+            .old_dentry    = lower_old_dentry,
+            .new_mnt_idmap = &nop_mnt_idmap,
+            .new_dir       = d_inode(lower_new_dir),
+            .new_dentry    = lower_new_dentry,
+            .flags         = flags,
+        };
+        err = vfs_rename(&rd);
+    }
     return err;
 }
 
