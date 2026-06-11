@@ -31,33 +31,45 @@ static long cowfs_ctl_ioctl(struct file *file, unsigned int cmd,
 
     case COWFS_IOC_LIST: {
         struct cowfs_list_req __user *ureq = (void __user *)arg;
-        struct cowfs_list_req req;
+        struct cowfs_list_req *req;
         struct cow_version *versions[COWFS_IOC_MAX_VERSIONS];
         unsigned long ino;
         struct super_block *sb;
         int i, count;
+        long ret = 0;
 
-        if (copy_from_user(&req, ureq, sizeof(req)))
-            return -EFAULT;
+        req = kzalloc(sizeof(*req), GFP_KERNEL);
+        if (!req)
+            return -ENOMEM;
 
-        if (path_to_lower_ino(req.path, &ino, &sb))
-            return -ENOENT;
-
-        count = cowfs_version_list(ino, versions,
-                                    min_t(u32, req.max_count, COWFS_IOC_MAX_VERSIONS));
-        req.found_count = count;
-
-        for (i = 0; i < count; i++) {
-            req.versions[i].timestamp = versions[i]->timestamp;
-            req.versions[i].op_type   = versions[i]->op_type;
-            strscpy(req.versions[i].shadow_path,
-                    versions[i]->shadow_path,
-                    sizeof(req.versions[i].shadow_path));
+        if (copy_from_user(req, ureq, sizeof(*req))) {
+            ret = -EFAULT;
+            goto list_out;
         }
 
-        if (copy_to_user(ureq, &req, sizeof(req)))
-            return -EFAULT;
-        return 0;
+        if (path_to_lower_ino(req->path, &ino, &sb)) {
+            ret = -ENOENT;
+            goto list_out;
+        }
+
+        count = cowfs_version_list(ino, versions,
+                                    min_t(u32, req->max_count, COWFS_IOC_MAX_VERSIONS));
+        req->found_count = count;
+
+        for (i = 0; i < count; i++) {
+            req->versions[i].timestamp = versions[i]->timestamp;
+            req->versions[i].op_type   = versions[i]->op_type;
+            strscpy(req->versions[i].shadow_path,
+                    versions[i]->shadow_path,
+                    sizeof(req->versions[i].shadow_path));
+        }
+
+        if (copy_to_user(ureq, req, sizeof(*req)))
+            ret = -EFAULT;
+
+list_out:
+        kfree(req);
+        return ret;
     }
 
     case COWFS_IOC_ROLLBACK: {
