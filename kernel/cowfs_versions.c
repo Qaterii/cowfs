@@ -4,6 +4,7 @@
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
 #include <linux/ktime.h>
+#include <linux/string.h>
 
 #define VERSIONS_HASH_BITS 8
 static DEFINE_HASHTABLE(versions_htable, VERSIONS_HASH_BITS);
@@ -163,6 +164,40 @@ struct cow_version *cowfs_version_find(unsigned long ino, u64 timestamp)
         }
         spin_unlock(&info->lock);
         break;
+    }
+    spin_unlock_irqrestore(&versions_lock, flags);
+    return found;
+}
+
+/*
+ * Найти версию COW_OP_UNLINK по исходному имени файла — используется для
+ * отката удаления, когда путь уже не существует и поэтому inode нижней
+ * ФС (ключ хеш-таблицы) недоступен через kern_path().
+ *
+ * Если несколько удалённых файлов в разных каталогах имели одинаковое
+ * имя, найдена будет последняя добавленная подходящая версия.
+ */
+struct cow_version *cowfs_version_find_deleted(const char *name, u64 timestamp)
+{
+    struct cow_inode_info *info;
+    struct cow_version *v, *found = NULL;
+    int bkt;
+    unsigned long flags;
+
+    spin_lock_irqsave(&versions_lock, flags);
+    hash_for_each(versions_htable, bkt, info, hash_node) {
+        spin_lock(&info->lock);
+        list_for_each_entry(v, &info->versions, node) {
+            if (v->op_type != COW_OP_UNLINK)
+                continue;
+            if (strcmp(v->orig_name, name) != 0)
+                continue;
+            if (timestamp != 0 && v->timestamp != timestamp)
+                continue;
+            if (!found || v->timestamp > found->timestamp)
+                found = v;
+        }
+        spin_unlock(&info->lock);
     }
     spin_unlock_irqrestore(&versions_lock, flags);
     return found;

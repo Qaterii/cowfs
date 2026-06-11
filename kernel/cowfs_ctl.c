@@ -2,6 +2,7 @@
 #include <linux/miscdevice.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
+#include <linux/string.h>
 
 static int path_to_lower_ino(const char *path, unsigned long *ino_out,
                                struct super_block **sb_out)
@@ -22,6 +23,70 @@ static int path_to_lower_ino(const char *path, unsigned long *ino_out,
     *sb_out  = p.dentry->d_sb;
     path_put(&p);
     return 0;
+}
+
+/*
+ * Откат удаления (COW_OP_UNLINK), когда путь уже не существует —
+ * path_to_lower_ino() не может его разрешить, поэтому ino-ключ версии
+ * неизвестен. Ищем версию по исходному имени файла и пересоздаём его
+ * в родительском каталоге.
+ */
+static int rollback_deleted(const char *path, u64 timestamp)
+{
+    struct cow_version *v;
+    struct path parent_path;
+    struct dentry *lower_parent, *new_dentry;
+    struct inode *lower_dir;
+    struct cowfs_sb_info *sbi;
+    char dirbuf[512];
+    char *slash;
+    const char *base;
+    int err;
+
+    strscpy(dirbuf, path, sizeof(dirbuf));
+    slash = strrchr(dirbuf, '/');
+    if (!slash)
+        return -EINVAL;
+    base = path + (slash - dirbuf) + 1;
+    if (!*base)
+        return -EINVAL;
+    if (slash == dirbuf)
+        dirbuf[1] = '\0';
+    else
+        *slash = '\0';
+
+    v = cowfs_version_find_deleted(base, timestamp);
+    if (!v)
+        return -ENOENT;
+
+    err = kern_path(dirbuf, LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &parent_path);
+    if (err)
+        return err;
+
+    if (parent_path.dentry->d_sb->s_magic != COWFS_MAGIC) {
+        path_put(&parent_path);
+        return -EINVAL;
+    }
+
+    sbi = COWFS_SB(parent_path.dentry->d_sb);
+    lower_parent = cowfs_lower_dentry(parent_path.dentry);
+    lower_dir = d_inode(lower_parent);
+
+    inode_lock(lower_dir);
+    new_dentry = lookup_one_len(base, lower_parent, strlen(base));
+    if (!IS_ERR(new_dentry)) {
+        err = vfs_create(&nop_mnt_idmap, lower_dir, new_dentry,
+                          v->saved_stat.mode, false);
+        if (!err && v->has_data)
+            cowfs_shadow_restore_file(v->shadow_path, new_dentry, sbi->lower_mnt);
+        dput(new_dentry);
+    } else {
+        err = PTR_ERR(new_dentry);
+    }
+    inode_unlock(lower_dir);
+
+    path_put(&parent_path);
+    return err;
 }
 
 static long cowfs_ctl_ioctl(struct file *file, unsigned int cmd,
@@ -85,6 +150,8 @@ list_out:
             return -EFAULT;
 
         err = path_to_lower_ino(req.path, &ino, &sb);
+        if (err == -ENOENT)
+            return rollback_deleted(req.path, req.timestamp);
         if (err)
             return err;
 
@@ -129,6 +196,31 @@ list_out:
                 /* WRITE: восстановить содержимое */
                 err = cowfs_shadow_restore_file(v->shadow_path,
                                                  lower, sbi->lower_mnt);
+
+            } else if (v->op_type == COW_OP_RENAME) {
+                /* Вернуть файлу исходное имя */
+                struct inode *dir_inode = d_inode(lower->d_parent);
+                struct dentry *old_name_dentry;
+
+                inode_lock(dir_inode);
+                old_name_dentry = lookup_one_len(v->orig_name,
+                                                  lower->d_parent,
+                                                  strlen(v->orig_name));
+                if (!IS_ERR(old_name_dentry)) {
+                    struct renamedata rd = {
+                        .old_mnt_idmap = &nop_mnt_idmap,
+                        .old_dir       = dir_inode,
+                        .old_dentry    = lower,
+                        .new_mnt_idmap = &nop_mnt_idmap,
+                        .new_dir       = dir_inode,
+                        .new_dentry    = old_name_dentry,
+                    };
+                    err = vfs_rename(&rd);
+                    dput(old_name_dentry);
+                } else {
+                    err = PTR_ERR(old_name_dentry);
+                }
+                inode_unlock(dir_inode);
             }
 
             if (!err && v->op_type == COW_OP_SETATTR) {

@@ -138,6 +138,7 @@ int  cowfs_version_add(unsigned long ino, struct cow_version *v);
 int  cowfs_version_list(unsigned long ino,
                          struct cow_version **out, int max_count);
 struct cow_version *cowfs_version_find(unsigned long ino, u64 timestamp);
+struct cow_version *cowfs_version_find_deleted(const char *name, u64 timestamp);
 void cowfs_version_gc(void);
 void cowfs_versions_gc_all(void);
 
