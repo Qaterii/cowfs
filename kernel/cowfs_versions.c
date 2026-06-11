@@ -217,19 +217,26 @@ void cowfs_version_gc(void)
     int bkt;
     unsigned long flags;
 
+    int scanned = 0, marked = 0;
+
     spin_lock_irqsave(&versions_lock, flags);
     hash_for_each(versions_htable, bkt, info, hash_node) {
         spin_lock(&info->lock);
         list_for_each_entry_safe(v, tmp, &info->versions, node) {
+            scanned++;
             if (v->timestamp < cutoff) {
                 list_del(&v->node);
                 info->version_count--;
                 list_add(&v->node, &freed);
+                marked++;
             }
         }
         spin_unlock(&info->lock);
     }
     spin_unlock_irqrestore(&versions_lock, flags);
+
+    pr_info("cowfs: gc: now=%llu cutoff=%llu scanned=%d marked=%d\n",
+            now, cutoff, scanned, marked);
 
     /* cowfs_version_free() may sleep (removes shadow file) - free the
      * collected versions outside the spinlocks. */
