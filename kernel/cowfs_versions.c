@@ -93,6 +93,7 @@ static struct cow_inode_info *find_or_create_inode_info(unsigned long ino)
 int cowfs_version_add(unsigned long ino, struct cow_version *v)
 {
     struct cow_inode_info *info;
+    struct cow_version *oldest = NULL;
     unsigned long flags;
 
     spin_lock_irqsave(&versions_lock, flags);
@@ -105,11 +106,9 @@ int cowfs_version_add(unsigned long ino, struct cow_version *v)
     spin_lock(&info->lock);
 
     if (info->version_count >= COWFS_MAX_VERSIONS) {
-        struct cow_version *oldest =
-            list_last_entry(&info->versions, struct cow_version, node);
+        oldest = list_last_entry(&info->versions, struct cow_version, node);
         list_del(&oldest->node);
         info->version_count--;
-        cowfs_version_free(oldest);
     }
 
     list_add(&v->node, &info->versions);
@@ -117,6 +116,11 @@ int cowfs_version_add(unsigned long ino, struct cow_version *v)
 
     spin_unlock(&info->lock);
     spin_unlock_irqrestore(&versions_lock, flags);
+
+    /* cowfs_version_free() may sleep (removes shadow file) - must not
+     * be called while holding the spinlocks above. */
+    if (oldest)
+        cowfs_version_free(oldest);
     return 0;
 }
 
@@ -207,6 +211,7 @@ void cowfs_version_gc(void)
 {
     struct cow_inode_info *info;
     struct cow_version *v, *tmp;
+    LIST_HEAD(freed);
     u64 now    = ktime_get_real_ns();
     u64 cutoff = now - (u64)cowfs_window_seconds * NSEC_PER_SEC;
     int bkt;
@@ -219,12 +224,19 @@ void cowfs_version_gc(void)
             if (v->timestamp < cutoff) {
                 list_del(&v->node);
                 info->version_count--;
-                cowfs_version_free(v);
+                list_add(&v->node, &freed);
             }
         }
         spin_unlock(&info->lock);
     }
     spin_unlock_irqrestore(&versions_lock, flags);
+
+    /* cowfs_version_free() may sleep (removes shadow file) - free the
+     * collected versions outside the spinlocks. */
+    list_for_each_entry_safe(v, tmp, &freed, node) {
+        list_del(&v->node);
+        cowfs_version_free(v);
+    }
 }
 
 void cowfs_versions_gc_all(void)
@@ -232,6 +244,7 @@ void cowfs_versions_gc_all(void)
     struct cow_inode_info *info;
     struct cow_version *v, *tmp;
     struct hlist_node *hnode_tmp;
+    LIST_HEAD(freed);
     int bkt;
     unsigned long flags;
 
@@ -240,13 +253,18 @@ void cowfs_versions_gc_all(void)
         spin_lock(&info->lock);
         list_for_each_entry_safe(v, tmp, &info->versions, node) {
             list_del(&v->node);
-            cowfs_version_free(v);
+            list_add(&v->node, &freed);
         }
         spin_unlock(&info->lock);
         hash_del(&info->hash_node);
         kmem_cache_free(cow_inode_info_cache, info);
     }
     spin_unlock_irqrestore(&versions_lock, flags);
+
+    list_for_each_entry_safe(v, tmp, &freed, node) {
+        list_del(&v->node);
+        cowfs_version_free(v);
+    }
 }
 
 static void gc_worker(struct work_struct *work)

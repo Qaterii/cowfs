@@ -207,8 +207,11 @@ void cowfs_shadow_remove(const char *shadow_path)
 
     err = kern_path(shadow_path, 0, &path);
     if (!err) {
-        err = vfs_unlink(&nop_mnt_idmap, d_inode(path.dentry->d_parent),
-                         path.dentry, NULL);
+        struct inode *dir = d_inode(path.dentry->d_parent);
+
+        inode_lock(dir);
+        err = vfs_unlink(&nop_mnt_idmap, dir, path.dentry, NULL);
+        inode_unlock(dir);
         path_put(&path);
         if (err)
             pr_warn("cowfs: failed to remove shadow %s: %d\n",
