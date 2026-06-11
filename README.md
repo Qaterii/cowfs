@@ -281,64 +281,161 @@ sudo bash kernel/tests/run_gc_test.sh
 
 ### Ручные тесты (вручную, по шагам)
 
-#### Тест 1 — откат записи
+Для каждого теста ниже описано: что он делает, в чём суть проверки и как
+по выводу команд понять, что тест прошёл успешно.
+
+#### Тест 1 — откат записи (WRITE rollback)
+
+**Суть:** при каждой записи в файл cowfs сохраняет теневую копию его
+предыдущего состояния. `cowctl rollback` должен вернуть файл к этому
+состоянию.
 
 ```bash
-echo "original" > /mnt/cow/test.txt
-echo "modified" > /mnt/cow/test.txt
-cat /mnt/cow/test.txt          # modified
+F=/mnt/cow/t_write.txt
+rm -f "$F"
 
-cowctl rollback /mnt/cow/test.txt
-cat /mnt/cow/test.txt          # original
+echo "original" > "$F"
+echo "modified" > "$F"
+cat "$F"                    # modified
+
+cowctl rollback "$F"
+cat "$F"                    # original
+
+cowctl list "$F"
 ```
 
-#### Тест 2 — откат удаления
+**Как понять, что сработало:**
+- после второй записи `cat` выводит `modified`;
+- после `cowctl rollback` `cat` выводит `original` — содержимое
+  восстановлено из теневой копии;
+- `cowctl list` показывает хотя бы одну запись `WRITE` с путём в
+  `.cowfs_shadow/`.
+
+#### Тест 2 — откат удаления (UNLINK rollback), деструктивная операция
+
+**Суть:** перед `unlink` (`rm`) cowfs копирует файл целиком в shadow-store
+и запоминает исходное имя/каталог. `cowctl rollback` должен воссоздать
+файл с тем же содержимым и именем.
 
 ```bash
-echo "important" > /mnt/cow/important.txt
-rm /mnt/cow/important.txt
-ls /mnt/cow/important.txt      # No such file
+F=/mnt/cow/t_unlink.txt
+rm -f "$F"
 
-cowctl rollback /mnt/cow/important.txt
-cat /mnt/cow/important.txt     # important
+echo "important" > "$F"
+rm "$F"
+ls "$F"                     # No such file or directory
+
+cowctl rollback "$F"
+ls "$F"                     # файл снова существует
+cat "$F"                    # important
 ```
 
-#### Тест 3 — откат изменения прав
+**Как понять, что сработало:**
+- после `rm` файл реально пропал (`ls` — ошибка `No such file or
+  directory`), т.е. деструктивная операция выполнилась;
+- после `rollback` `ls` снова видит файл, а `cat` выводит исходное
+  содержимое `important` — значит файл был восстановлен из теневой
+  копии, а не просто остался на диске.
+
+#### Тест 3 — откат изменения прав (SETATTR/chmod rollback)
+
+**Суть:** перед `chmod`/`chown`/`truncate` cowfs сохраняет старые
+атрибуты inode (метаданные, без копии содержимого). `cowctl rollback`
+должен вернуть старые права.
 
 ```bash
-chmod 777 /mnt/cow/test.txt
-ls -la /mnt/cow/test.txt       # rwxrwxrwx
+F=/mnt/cow/t_chmod.txt
+rm -f "$F"
 
-cowctl rollback /mnt/cow/test.txt
-ls -la /mnt/cow/test.txt       # исходные права восстановлены
+echo "attrs" > "$F"
+orig=$(stat -c '%a' "$F")
+echo "было: $orig"
+
+chmod 777 "$F"
+stat -c '%a' "$F"           # 777
+
+cowctl rollback "$F"
+stat -c '%a' "$F"           # снова $orig
 ```
 
-#### Тест 4 — откат переименования
+**Как понять, что сработало:**
+- после `chmod 777` `stat` показывает `777` — деструктивное изменение
+  метаданных применилось;
+- после `rollback` `stat` показывает то же значение, что было до
+  `chmod` (например `644`/`664`) — метаданные восстановлены из
+  сохранённой версии, а не остались `777`.
+
+#### Тест 4 — откат переименования (RENAME rollback), деструктивная операция
+
+**Суть:** перед `rename` cowfs запоминает старое и новое имя/путь.
+`cowctl rollback` должен вернуть файл под старым именем (с тем же
+содержимым) и убрать его из-под нового.
 
 ```bash
-echo "rename-me" > /mnt/cow/old.txt
-mv /mnt/cow/old.txt /mnt/cow/new.txt
-ls /mnt/cow/old.txt /mnt/cow/new.txt   # old.txt: No such file, new.txt существует
+OLD=/mnt/cow/t_rename_old.txt
+NEW=/mnt/cow/t_rename_new.txt
+rm -f "$OLD" "$NEW"
 
-cowctl rollback /mnt/cow/new.txt
-ls /mnt/cow/old.txt /mnt/cow/new.txt   # old.txt существует, new.txt: No such file
+echo "rename-me" > "$OLD"
+mv "$OLD" "$NEW"
+ls "$OLD" "$NEW"             # OLD: No such file, NEW: существует
+
+cowctl rollback "$NEW"
+ls "$OLD" "$NEW"             # OLD: существует, NEW: No such file
+cat "$OLD"                   # rename-me
 ```
 
-#### Тест 5 — истечение окна хранения и работа GC
+**Как понять, что сработало:**
+- после `mv` старого имени уже нет, новое — есть (нормальное поведение
+  `mv`);
+- после `rollback` ситуация обратная: новое имя пропало, старое —
+  вернулось, и содержимое файла (`rename-me`) сохранилось — значит
+  откат не просто переименовал «как было», а корректно восстановил
+  состояние через версии.
+
+#### Тест 5 — истечение окна хранения и работа GC, деструктивная операция (для модуля)
+
+**Суть:** проверка фонового сборщика мусора (`gc_worker`), который
+работает в workqueue, удаляет устаревшие версии из хеш-таблицы в памяти
+и физически стирает теневые файлы (`vfs_unlink` из контекста ядра без
+пользовательского mount namespace). Главная цель — убедиться, что это
+**не роняет ядро** и не оставляет мусор в `.cowfs_shadow/`.
 
 ```bash
-# модуль должен быть загружен с небольшими window_seconds/gc_interval,
+# модуль должен быть загружен с маленькими параметрами,
 # например window_seconds=10 gc_interval=3
+sudo umount /mnt/cow
+sudo rmmod cowfs
+sudo dmesg -C
+sudo insmod cowfs.ko window_seconds=10 gc_interval=3
+sudo mount -t cowfs -o lowerdir=/data/lower cowfs /mnt/cow
+
+sudo find /data/lower/.cowfs_shadow -type f -delete   # убрать "хвосты" прошлых тестов
+
 echo "v1" > /mnt/cow/t_gc.txt
 echo "v2" > /mnt/cow/t_gc.txt
 ls /data/lower/.cowfs_shadow/          # теневая копия 'v1' присутствует
 
-sleep 15
-ls /data/lower/.cowfs_shadow/          # теневая копия удалена сборщиком мусора
-dmesg | tail -20                       # нет panic/oops/WARN, модуль и точка монтирования живы
-mount | grep cowfs
-lsmod | grep cowfs
+sleep 15                                # window_seconds + gc_interval с запасом
+
+ls /data/lower/.cowfs_shadow/          # теневых файлов быть не должно
+mount | grep cowfs                     # /mnt/cow всё ещё смонтирована
+lsmod | grep cowfs                     # модуль всё ещё загружен
+cat /mnt/cow/t_gc.txt                  # v2 — сам файл не пострадал
+
+sudo dmesg | grep -iE 'cowfs: (gc:|removed shadow|failed to remove|panic|oops|BUG: scheduling while atomic|WARNING)'
 ```
+
+**Как понять, что сработало:**
+- до `sleep` теневой файл от записи `v1` есть в `.cowfs_shadow/`;
+- после `sleep` он исчез — GC отработал и удалил устаревшую версию;
+- `/mnt/cow` остаётся смонтирована, модуль остаётся загружен, `cat`
+  файла работает — GC не сломал ФС;
+- в `dmesg` есть `cowfs: gc: removed N of N version(s)` и
+  `cowfs: removed shadow ...` для каждого удалённого файла, и **нет**
+  строк `panic`/`oops`/`BUG: scheduling while atomic`/`WARNING` — это
+  подтверждает, что фоновое удаление из workqueue прошло безопасно (без
+  сна под спинлоком, без обращения к чужому mount namespace и т.п.).
 
 ---
 
