@@ -40,7 +40,10 @@ static ssize_t cowfs_read(struct file *file, char __user *buf,
                            size_t count, loff_t *ppos)
 {
     struct file *lower_file = cowfs_lower_file(file);
-    return vfs_read(lower_file, buf, count, ppos);
+    struct iov_iter iter;
+
+    iov_iter_ubuf(&iter, ITER_DEST, buf, count);
+    return vfs_iter_read(lower_file, &iter, ppos, 0);
 }
 
 static ssize_t cowfs_write(struct file *file, const char __user *buf,
@@ -79,7 +82,12 @@ static ssize_t cowfs_write(struct file *file, const char __user *buf,
         }
     }
 
-    return vfs_write(lower_file, buf, count, ppos);
+    {
+        struct iov_iter iter;
+
+        iov_iter_ubuf(&iter, ITER_SOURCE, (void __user *)buf, count);
+        return vfs_iter_write(lower_file, &iter, ppos, 0);
+    }
 }
 
 static loff_t cowfs_llseek(struct file *file, loff_t offset, int whence)
