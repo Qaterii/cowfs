@@ -190,14 +190,16 @@ static int cowfs_setattr(struct mnt_idmap *idmap,
                           struct dentry *dentry, struct iattr *attr)
 {
     struct dentry *lower_dentry = cowfs_lower_dentry(dentry);
+    struct inode  *lower_inode  = d_inode(lower_dentry);
     struct super_block *sb = dentry->d_sb;
     struct cow_version *v;
+    struct iattr lower_attr;
     int err;
 
     /* COW: сохранить текущие атрибуты */
     v = cowfs_version_alloc(COW_OP_SETATTR);
     if (v) {
-        unsigned long ino = d_inode(lower_dentry)->i_ino;
+        unsigned long ino = lower_inode->i_ino;
         vfs_getattr(&(struct path){
             .mnt = COWFS_SB(sb)->lower_mnt,
             .dentry = lower_dentry }, &v->saved_stat, STATX_BASIC_STATS, 0);
@@ -205,13 +207,26 @@ static int cowfs_setattr(struct mnt_idmap *idmap,
         cowfs_version_add(ino, v);
     }
 
-    err = notify_change(&nop_mnt_idmap, lower_dentry, attr, NULL);
+    /*
+     * ATTR_FILE/ATTR_OPEN и attr->ia_file (если заданы, например при
+     * O_TRUNC) указывают на верхний (cowfs) struct file и не имеют
+     * смысла для нижней ФС. Кроме того, notify_change() требует, чтобы
+     * inode был залочен (WARN_ON_ONCE -> panic при panic_on_warn=1
+     * на WSL2), а нижний inode мы ещё не лочили.
+     */
+    lower_attr = *attr;
+    lower_attr.ia_valid &= ~(ATTR_FILE | ATTR_OPEN);
+
+    inode_lock(lower_inode);
+    err = notify_change(&nop_mnt_idmap, lower_dentry, &lower_attr, NULL);
+    inode_unlock(lower_inode);
+
     if (!err) {
-        struct inode *lower_inode = d_inode(lower_dentry);
-        struct inode *inode       = d_inode(dentry);
+        struct inode *inode = d_inode(dentry);
         inode->i_uid   = lower_inode->i_uid;
         inode->i_gid   = lower_inode->i_gid;
         inode->i_mode  = lower_inode->i_mode;
+        inode->i_size  = lower_inode->i_size;
         inode->i_mtime = lower_inode->i_mtime;
         inode->i_atime = lower_inode->i_atime;
     }
