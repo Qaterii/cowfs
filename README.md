@@ -236,7 +236,52 @@ echo 60 | sudo tee /sys/module/cowfs/parameters/gc_interval
 
 ## Тестирование
 
-### Тест 1 — откат записи
+В `kernel/tests/` есть два полуавтоматических скрипта, покрывающих все
+заявленные сценарии. Их можно запускать сразу после `mount`, не трогая
+модуль повторно.
+
+### Автоматические тесты: write / unlink / setattr / rename
+
+```bash
+sudo bash kernel/tests/run_tests.sh
+```
+
+Покрывает:
+
+| № | Операция | Что проверяется |
+|---|---|---|
+| 1 | `write`   | Файл изменён (`modified`), затем `cowctl rollback` возвращает исходное содержимое (`original`) |
+| 2 | `unlink`  | Файл удалён (`rm`), затем `cowctl rollback` восстанавливает файл и его содержимое из теневой копии |
+| 3 | `setattr` | `chmod 777` применяется, затем `cowctl rollback` возвращает исходные права доступа |
+| 4 | `rename`  | `mv` переименовывает файл, затем `cowctl rollback` возвращает старое имя |
+
+В конце скрипт выводит `cowctl list` для всех тестовых файлов и хвост
+`dmesg`, а также итог `PASS=N FAIL=M`.
+
+### Автоматический тест: сборщик мусора (GC) и истечение окна
+
+Этот тест отдельный, так как требует **маленьких** значений
+`window_seconds`/`gc_interval`, чтобы не ждать 5 минут. Перезагрузите
+модуль с такими параметрами и запустите тест:
+
+```bash
+sudo umount /mnt/cow
+sudo rmmod cowfs
+sudo insmod cowfs.ko window_seconds=10 gc_interval=3
+sudo mount -t cowfs -o lowerdir=/data/lower cowfs /mnt/cow
+
+sudo bash kernel/tests/run_gc_test.sh
+```
+
+Покрывает:
+
+| № | Сценарий | Что проверяется |
+|---|---|---|
+| 5 | Истечение окна хранения | После `write` создаётся версия с теневой копией; после ожидания `window_seconds + gc_interval` GC удаляет устаревшую версию и теневой файл, **модуль не падает**, `/mnt/cow` остаётся смонтированной, файл остаётся доступным, в `dmesg` нет `panic`/`oops`/`BUG: scheduling while atomic`/`WARNING` |
+
+### Ручные тесты (вручную, по шагам)
+
+#### Тест 1 — откат записи
 
 ```bash
 echo "original" > /mnt/cow/test.txt
@@ -247,7 +292,7 @@ cowctl rollback /mnt/cow/test.txt
 cat /mnt/cow/test.txt          # original
 ```
 
-### Тест 2 — откат удаления
+#### Тест 2 — откат удаления
 
 ```bash
 echo "important" > /mnt/cow/important.txt
@@ -258,7 +303,7 @@ cowctl rollback /mnt/cow/important.txt
 cat /mnt/cow/important.txt     # important
 ```
 
-### Тест 3 — откат изменения прав
+#### Тест 3 — откат изменения прав
 
 ```bash
 chmod 777 /mnt/cow/test.txt
@@ -266,6 +311,33 @@ ls -la /mnt/cow/test.txt       # rwxrwxrwx
 
 cowctl rollback /mnt/cow/test.txt
 ls -la /mnt/cow/test.txt       # исходные права восстановлены
+```
+
+#### Тест 4 — откат переименования
+
+```bash
+echo "rename-me" > /mnt/cow/old.txt
+mv /mnt/cow/old.txt /mnt/cow/new.txt
+ls /mnt/cow/old.txt /mnt/cow/new.txt   # old.txt: No such file, new.txt существует
+
+cowctl rollback /mnt/cow/new.txt
+ls /mnt/cow/old.txt /mnt/cow/new.txt   # old.txt существует, new.txt: No such file
+```
+
+#### Тест 5 — истечение окна хранения и работа GC
+
+```bash
+# модуль должен быть загружен с небольшими window_seconds/gc_interval,
+# например window_seconds=10 gc_interval=3
+echo "v1" > /mnt/cow/t_gc.txt
+echo "v2" > /mnt/cow/t_gc.txt
+ls /data/lower/.cowfs_shadow/          # теневая копия 'v1' присутствует
+
+sleep 15
+ls /data/lower/.cowfs_shadow/          # теневая копия удалена сборщиком мусора
+dmesg | tail -20                       # нет panic/oops/WARN, модуль и точка монтирования живы
+mount | grep cowfs
+lsmod | grep cowfs
 ```
 
 ---
