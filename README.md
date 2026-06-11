@@ -222,16 +222,6 @@ cowctl rollback /mnt/cow/myfile.txt
 cowctl rollback /mnt/cow/myfile.txt 1718107150
 ```
 
-### Изменение параметров на лету (без перезагрузки модуля)
-
-```bash
-# Изменить размер окна хранения снимков
-echo 600 | sudo tee /sys/module/cowfs/parameters/window_seconds
-
-# Изменить интервал GC
-echo 60 | sudo tee /sys/module/cowfs/parameters/gc_interval
-```
-
 ---
 
 ## Тестирование
@@ -568,6 +558,41 @@ rm -rf ~/cowfs
 |---|---|---|
 | `window_seconds` | 300 | Время хранения снимков (секунды) |
 | `gc_interval` | 60 | Интервал запуска сборщика мусора (секунды) |
+
+Оба параметра объявлены через `module_param_named(..., 0644)`
+([cowfs_main.c](kernel/cowfs_main.c)), поэтому их можно менять двумя
+способами.
+
+### Способ 1 — задать при загрузке модуля
+
+```bash
+sudo insmod cowfs.ko window_seconds=120 gc_interval=30
+```
+
+Если модуль уже загружен с другими значениями — сначала выгрузить
+(см. раздел "Остановка"), затем загрузить заново с нужными параметрами.
+
+### Способ 2 — изменить на лету (без перезагрузки модуля)
+
+Благодаря правам `0644` параметры доступны через sysfs и применяются
+сразу, без `rmmod`/`insmod` и без размонтирования `/mnt/cow`:
+
+```bash
+# Изменить размер окна хранения снимков (секунды)
+echo 600 | sudo tee /sys/module/cowfs/parameters/window_seconds
+
+# Изменить интервал запуска GC (секунды)
+echo 60 | sudo tee /sys/module/cowfs/parameters/gc_interval
+
+# Проверить текущие значения
+cat /sys/module/cowfs/parameters/window_seconds
+cat /sys/module/cowfs/parameters/gc_interval
+```
+
+> Изменение `gc_interval` применяется со следующего запуска
+> `gc_worker` (текущий уже запланированный прогон отработает со
+> старым интервалом). Изменение `window_seconds` применяется сразу —
+> следующий же прогон GC использует новое значение `cutoff`.
 
 ---
 
