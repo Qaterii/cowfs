@@ -250,6 +250,8 @@ void cowfs_shadow_remove(const char *shadow_path)
             if (err)
                 pr_warn("cowfs: failed to remove shadow %s: %d\n",
                         shadow_path, err);
+            else
+                pr_info("cowfs: removed shadow %s\n", shadow_path);
         }
         dput(victim);
     } else {

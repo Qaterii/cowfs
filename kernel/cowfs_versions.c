@@ -235,8 +235,8 @@ void cowfs_version_gc(void)
     }
     spin_unlock_irqrestore(&versions_lock, flags);
 
-    pr_info("cowfs: gc: now=%llu cutoff=%llu scanned=%d marked=%d\n",
-            now, cutoff, scanned, marked);
+    if (marked)
+        pr_info("cowfs: gc: removed %d of %d version(s)\n", marked, scanned);
 
     /* cowfs_version_free() may sleep (removes shadow file) - free the
      * collected versions outside the spinlocks. */
