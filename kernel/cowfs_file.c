@@ -40,9 +40,7 @@ static ssize_t cowfs_read(struct file *file, char __user *buf,
                            size_t count, loff_t *ppos)
 {
     struct file *lower_file = cowfs_lower_file(file);
-    ssize_t ret = kernel_read(lower_file, buf, count, ppos);
-    file->f_pos = lower_file->f_pos;
-    return ret;
+    return vfs_read(lower_file, buf, count, ppos);
 }
 
 static ssize_t cowfs_write(struct file *file, const char __user *buf,
@@ -60,41 +58,28 @@ static ssize_t cowfs_write(struct file *file, const char __user *buf,
                                   file->f_flags & O_RDWR)) {
         fi->snapshot_taken = true;
 
-        pr_emerg("cowfs: DEBUG write: snapshot start\n");
         struct cow_version *v = cowfs_version_alloc(COW_OP_WRITE);
-        pr_emerg("cowfs: DEBUG write: version_alloc=%p\n", v);
         if (v) {
             unsigned long ino = d_inode(lower_dentry)->i_ino;
-            pr_emerg("cowfs: DEBUG write: ino=%lu\n", ino);
             cowfs_shadow_make_path(sb, ino, v->timestamp,
                                     shadow_path, sizeof(shadow_path));
-            pr_emerg("cowfs: DEBUG write: shadow_path=%s\n", shadow_path);
             err = cowfs_shadow_copy_file(lower_dentry,
                                           COWFS_SB(sb)->lower_mnt,
                                           shadow_path);
-            pr_emerg("cowfs: DEBUG write: shadow_copy_file=%d\n", err);
             if (!err) {
                 strscpy(v->shadow_path, shadow_path, sizeof(v->shadow_path));
                 v->has_data = true;
-                pr_emerg("cowfs: DEBUG write: before vfs_getattr\n");
                 vfs_getattr(&lower_file->f_path, &v->saved_stat,
                             STATX_BASIC_STATS, 0);
-                pr_emerg("cowfs: DEBUG write: after vfs_getattr\n");
                 cowfs_version_add(ino, v);
-                pr_emerg("cowfs: DEBUG write: after version_add\n");
             } else {
                 pr_warn("cowfs: COW copy failed for write: %d\n", err);
                 cowfs_version_free(v);
             }
         }
-        pr_emerg("cowfs: DEBUG write: snapshot done\n");
     }
 
-    pr_emerg("cowfs: DEBUG write: before kernel_write\n");
-    err = kernel_write(lower_file, buf, count, ppos);
-    pr_emerg("cowfs: DEBUG write: after kernel_write err=%d\n", err);
-    file->f_pos = lower_file->f_pos;
-    return err;
+    return vfs_write(lower_file, buf, count, ppos);
 }
 
 static loff_t cowfs_llseek(struct file *file, loff_t offset, int whence)
