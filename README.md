@@ -136,7 +136,7 @@ sudo apt install -y build-essential linux-headers-$(uname -r) git
 ### 2. Клонировать репозиторий
 
 ```bash
-git clone https://github.com/<ВАШ_ЛОГИН>/cowfs.git
+git clone https://github.com/Qaterii/cowfs.git
 cd cowfs
 ```
 
