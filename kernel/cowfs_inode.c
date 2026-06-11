@@ -199,9 +199,10 @@ static int cowfs_setattr(struct mnt_idmap *idmap,
     struct super_block *sb = dentry->d_sb;
     struct cow_version *v;
     struct iattr lower_attr;
+    char shadow_path[256];
     int err;
 
-    /* COW: сохранить текущие атрибуты */
+    /* COW: сохранить текущие атрибуты (и данные, если это truncate) */
     v = cowfs_version_alloc(COW_OP_SETATTR);
     if (v) {
         unsigned long ino = lower_inode->i_ino;
@@ -209,6 +210,27 @@ static int cowfs_setattr(struct mnt_idmap *idmap,
             .mnt = COWFS_SB(sb)->lower_mnt,
             .dentry = lower_dentry }, &v->saved_stat, STATX_BASIC_STATS, 0);
         v->has_data = false;
+
+        /*
+         * ATTR_SIZE (truncate, в т.ч. через O_TRUNC при open) уничтожает
+         * содержимое файла ДО того, как cowfs_write успеет снять свой
+         * снимок при первой записи. Поэтому сохраняем полную копию
+         * содержимого здесь же, до notify_change().
+         */
+        if (attr->ia_valid & ATTR_SIZE) {
+            cowfs_shadow_make_path(sb, ino, v->timestamp,
+                                    shadow_path, sizeof(shadow_path));
+            err = cowfs_shadow_copy_file(lower_dentry,
+                                          COWFS_SB(sb)->lower_mnt,
+                                          shadow_path);
+            if (!err) {
+                strscpy(v->shadow_path, shadow_path, sizeof(v->shadow_path));
+                v->has_data = true;
+            } else {
+                pr_warn("cowfs: COW copy failed for setattr: %d\n", err);
+            }
+        }
+
         cowfs_version_add(ino, v);
     }
 
@@ -234,6 +256,16 @@ static int cowfs_setattr(struct mnt_idmap *idmap,
         inode->i_size  = lower_inode->i_size;
         inode->i_mtime = lower_inode->i_mtime;
         inode->i_atime = lower_inode->i_atime;
+
+        /*
+         * Если это truncate при открытии (O_TRUNC), мы уже сохранили
+         * содержимое выше - не дать cowfs_write() сделать ещё один
+         * (уже бесполезный, по усечённому файлу) снимок при первой
+         * записи в этот fd.
+         */
+        if ((attr->ia_valid & (ATTR_SIZE | ATTR_FILE)) ==
+                              (ATTR_SIZE | ATTR_FILE) && attr->ia_file)
+            COWFS_F(attr->ia_file)->snapshot_taken = true;
     }
     return err;
 }
