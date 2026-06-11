@@ -1,5 +1,6 @@
 #include "cowfs.h"
 #include <linux/uio.h>
+#include <linux/file.h>
 
 static int cowfs_open(struct inode *inode, struct file *file)
 {
