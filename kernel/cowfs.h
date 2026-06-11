@@ -52,6 +52,7 @@ struct cow_inode_info {
 struct cowfs_sb_info {
     struct vfsmount *lower_mnt;
     struct dentry   *lower_root;
+    char             lowerdir[512];
     char             shadow_root[512];
 };
 

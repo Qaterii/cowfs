@@ -43,7 +43,7 @@ int cowfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 int cowfs_show_options(struct seq_file *m, struct dentry *root)
 {
     struct cowfs_sb_info *sbi = COWFS_SB(root->d_sb);
-    seq_printf(m, ",lowerdir=%s", sbi->shadow_root);
+    seq_printf(m, ",lowerdir=%s", sbi->lowerdir);
     return 0;
 }
 
@@ -93,6 +93,7 @@ int cowfs_fill_super(struct super_block *sb, void *data, int silent)
 
     sbi->lower_mnt  = mntget(lower_path.mnt);
     sbi->lower_root = dget(lower_path.dentry);
+    strscpy(sbi->lowerdir, lowerdir, sizeof(sbi->lowerdir));
     snprintf(sbi->shadow_root, sizeof(sbi->shadow_root),
              "%s/" COWFS_SHADOW_DIR, lowerdir);
     path_put(&lower_path);

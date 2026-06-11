@@ -289,23 +289,27 @@ static int cowfs_getattr(struct mnt_idmap *idmap,
     struct dentry *lower_dentry = cowfs_lower_dentry(path->dentry);
     struct cowfs_sb_info *sbi = COWFS_SB(path->dentry->d_sb);
     struct path lower_path = { .mnt = sbi->lower_mnt, .dentry = lower_dentry };
-    return vfs_getattr(&lower_path, stat, request_mask, query_flags);
+
+    /*
+     * vfs_getattr_nosec() (вызывающая ->getattr для пути /mnt/cow)
+     * передаёт сюда query_flags с битом AT_GETATTR_NOSEC. Обычный
+     * vfs_getattr() начинается с WARN_ON_ONCE(query_flags &
+     * AT_GETATTR_NOSEC) -> -EPERM, поэтому для нижнего пути нужно
+     * использовать nosec-вариант (без повторной security-проверки).
+     */
+    return vfs_getattr_nosec(&lower_path, stat, request_mask, query_flags);
 }
 
-static int cowfs_permission(struct mnt_idmap *idmap,
-                             struct inode *inode, int mask)
-{
-    struct inode *lower_inode = d_inode(
-        cowfs_lower_dentry(d_find_alias(inode)));
-    if (!lower_inode)
-        return -EACCES;
-    return inode_permission(&nop_mnt_idmap, lower_inode, mask);
-}
+/*
+ * Кастомный .permission не используется: VFS падает обратно на
+ * generic_permission(), который проверяет права по inode->i_mode/
+ * i_uid/i_gid — эти поля синхронизируются с нижним inode в
+ * cowfs_get_inode() и cowfs_setattr().
+ */
 
 const struct inode_operations cowfs_file_iops = {
     .getattr    = cowfs_getattr,
     .setattr    = cowfs_setattr,
-    .permission = cowfs_permission,
 };
 
 const struct inode_operations cowfs_dir_iops = {
@@ -319,11 +323,9 @@ const struct inode_operations cowfs_dir_iops = {
     .link       = cowfs_link,
     .setattr    = cowfs_setattr,
     .getattr    = cowfs_getattr,
-    .permission = cowfs_permission,
 };
 
 const struct inode_operations cowfs_symlink_iops = {
     .get_link   = cowfs_get_link,
     .getattr    = cowfs_getattr,
-    .permission = cowfs_permission,
 };
