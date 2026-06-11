@@ -46,16 +46,21 @@ static struct dentry *cowfs_lookup(struct inode *dir,
                                     unsigned int flags)
 {
     struct dentry *lower_dentry, *lower_dir_dentry;
+    struct inode  *lower_dir_inode;
     struct inode  *lower_inode;
     struct inode  *inode = NULL;
     struct cowfs_dentry_info *di;
     int err = 0;
 
     lower_dir_dentry = cowfs_lower_dentry(dentry->d_parent);
+    lower_dir_inode  = d_inode(lower_dir_dentry);
 
+    /* lookup_one_len() требует залоченный родительский inode (WARN_ON_ONCE) */
+    inode_lock_shared(lower_dir_inode);
     lower_dentry = lookup_one_len(dentry->d_name.name,
                                    lower_dir_dentry,
                                    dentry->d_name.len);
+    inode_unlock_shared(lower_dir_inode);
     if (IS_ERR(lower_dentry))
         return ERR_CAST(lower_dentry);
 
