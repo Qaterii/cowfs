@@ -32,7 +32,7 @@ static long cowfs_ctl_ioctl(struct file *file, unsigned int cmd,
     case COWFS_IOC_LIST: {
         struct cowfs_list_req __user *ureq = (void __user *)arg;
         struct cowfs_list_req req;
-        struct cow_version *versions[64];
+        struct cow_version *versions[COWFS_IOC_MAX_VERSIONS];
         unsigned long ino;
         struct super_block *sb;
         int i, count;
@@ -44,7 +44,7 @@ static long cowfs_ctl_ioctl(struct file *file, unsigned int cmd,
             return -ENOENT;
 
         count = cowfs_version_list(ino, versions,
-                                    min_t(u32, req.max_count, 64));
+                                    min_t(u32, req.max_count, COWFS_IOC_MAX_VERSIONS));
         req.found_count = count;
 
         for (i = 0; i < count; i++) {

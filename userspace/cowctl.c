@@ -9,6 +9,9 @@
 
 #define COWFS_IOC_MAGIC 'C'
 
+/* Должно совпадать с COWFS_IOC_MAX_VERSIONS в kernel/cowfs.h */
+#define COWFS_IOC_MAX_VERSIONS 32
+
 struct cowfs_version_info {
     unsigned long long timestamp;
     unsigned int       op_type;
@@ -19,7 +22,7 @@ struct cowfs_list_req {
     char path[512];
     unsigned int max_count;
     unsigned int found_count;
-    struct cowfs_version_info versions[64];
+    struct cowfs_version_info versions[COWFS_IOC_MAX_VERSIONS];
 };
 
 struct cowfs_rollback_req {
@@ -57,7 +60,7 @@ static void cmd_list(const char *path)
     }
 
     strncpy(req.path, path, sizeof(req.path) - 1);
-    req.max_count = 64;
+    req.max_count = COWFS_IOC_MAX_VERSIONS;
 
     if (ioctl(fd, COWFS_IOC_LIST, &req) < 0) {
         perror("ioctl LIST");

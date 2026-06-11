@@ -147,6 +147,15 @@ void cowfs_ctl_exit(void);
 /* ioctl structures (shared with userspace) */
 #define COWFS_IOC_MAGIC 'C'
 
+/*
+ * Ограничение размера массива версий в ioctl-структуре: _IOC_SIZEBITS
+ * в asm-generic/ioctl.h допускает не более 16384 байт для всей структуры.
+ * При 64 версиях по ~272 байта структура превышает лимит и _IOWR()
+ * перестаёт быть константным выражением (ошибка "case label does not
+ * reduce to an integer constant"). 32 версии укладываются с запасом.
+ */
+#define COWFS_IOC_MAX_VERSIONS 32
+
 struct cowfs_version_info {
     u64  timestamp;
     u32  op_type;
@@ -157,7 +166,7 @@ struct cowfs_list_req {
     char path[512];
     u32  max_count;
     u32  found_count;
-    struct cowfs_version_info versions[64];
+    struct cowfs_version_info versions[COWFS_IOC_MAX_VERSIONS];
 };
 
 struct cowfs_rollback_req {
